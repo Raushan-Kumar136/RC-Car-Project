@@ -1,0 +1,49 @@
+#include <SPI.h>
+#include <TFT_22_ILI9225.h>
+
+// Pin definitions
+#define TFT_RST 2
+#define TFT_RS  4
+#define TFT_CS  5
+#define TFT_SDI 23
+#define TFT_CLK 18
+
+TFT_22_ILI9225 tft = TFT_22_ILI9225(TFT_RST, TFT_RS, TFT_CS, TFT_SDI, TFT_CLK);
+
+// Function to draw a smiley emoji
+void drawEmoji(int x, int y) {
+
+  // Face
+  tft.fillCircle(x, y, 15, COLOR_YELLOW);
+
+  // Eyes
+  tft.fillCircle(x-6, y-5, 2, COLOR_BLACK);
+  tft.fillCircle(x+6, y-5, 2, COLOR_BLACK);
+
+  // Smile
+  tft.drawLine(x-6, y+5, x+6, y+5, COLOR_BLACK);
+}
+
+void setup() {
+
+  Serial.begin(115200);
+
+  tft.begin();
+  tft.setOrientation(1);
+  tft.clear();
+
+  // Display name
+  tft.setFont(Terminal11x16);
+  tft.drawText(20, 5, "OM ARYAN", COLOR_WHITE);
+
+  // Draw emojis across the screen
+  for(int x = 20; x < 200; x += 40) {
+    for(int y = 40; y < 160; y += 40) {
+      drawEmoji(x, y);
+    }
+  }
+}
+
+void loop() {
+
+}
