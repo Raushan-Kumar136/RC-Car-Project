@@ -1,0 +1,151 @@
+#include "BluetoothSerial.h"
+
+BluetoothSerial SerialBT;
+
+// Motor pins
+#define IN1 26
+#define IN2 27
+#define IN3 14
+#define IN4 12
+
+#define ENA 25
+#define ENB 33
+
+char command;
+
+// TF-Luna pins
+#define LIDAR_RX 16
+#define LIDAR_TX 17
+
+HardwareSerial LidarSerial(2);
+
+int distance = 0;  // Store LiDAR distance
+
+// ESP32 PWM channels
+#define ENA_CHANNEL 0
+#define ENB_CHANNEL 1
+#define PWM_FREQ 5000
+#define PWM_RES 8  // 8-bit resolution
+
+int maxSpeed = 255;  // full PWM speed
+
+void setup() {
+  Serial.begin(115200);
+  SerialBT.begin("ESP32_CAR");
+
+  // Start LiDAR serial
+  LidarSerial.begin(115200, SERIAL_8N1, LIDAR_RX, LIDAR_TX);
+
+  // Motor pins
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  // Setup PWM for motor speed
+  ledcSetup(ENA_CHANNEL, PWM_FREQ, PWM_RES);
+  ledcSetup(ENB_CHANNEL, PWM_FREQ, PWM_RES);
+  ledcAttachPin(ENA, ENA_CHANNEL);
+  ledcAttachPin(ENB, ENB_CHANNEL);
+
+  // Set default speed to 90% of max
+  ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
+  ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
+
+  Serial.println("System Ready...");
+}
+
+void loop() {
+  // ================= TF-LUNA SAFE READ =================
+  static uint8_t buffer[9];
+  static uint8_t index = 0;
+
+  while (LidarSerial.available()) {
+    uint8_t byte = LidarSerial.read();
+
+    if (index == 0 && byte != 0x59) continue;
+    if (index == 1 && byte != 0x59) { index = 0; continue; }
+
+    buffer[index++] = byte;
+
+    if (index == 9) {
+      uint16_t sum = 0;
+      for (int i = 0; i < 8; i++) sum += buffer[i];
+      if ((sum & 0xFF) == buffer[8]) {
+        distance = buffer[2] + (buffer[3] << 8); // distance in cm
+        Serial.print("Distance: ");
+        Serial.print(distance);
+        Serial.println(" cm");
+      }
+      index = 0; // reset for next packet
+    }
+  }
+
+  // ================= BLUETOOTH CAR CONTROL =================
+  if (SerialBT.available()) {
+    command = SerialBT.read();
+    int currentSpeed = maxSpeed * 0.9; // default 90% speed
+
+    if (command == 'F') {
+      // Adjust speed based on distance
+      if (distance > 0) {
+        if (distance <= 10) {
+          currentSpeed = 0; // stop
+        } 
+        else if (distance <= 25) {
+          currentSpeed = maxSpeed * 0.4; // 40% speed
+        } 
+        else if (distance <= 40) {
+          currentSpeed = maxSpeed * 0.6; // 60% speed
+        }
+      }
+
+      Serial.print("Adjusted Speed: ");
+      Serial.println(currentSpeed);
+
+      digitalWrite(IN1, HIGH);
+      digitalWrite(IN2, LOW);
+      digitalWrite(IN3, HIGH);
+      digitalWrite(IN4, LOW);
+
+      ledcWrite(ENA_CHANNEL, currentSpeed);
+      ledcWrite(ENB_CHANNEL, currentSpeed);
+    }
+    else if (command == 'B') {
+      digitalWrite(IN1, LOW);
+      digitalWrite(IN2, HIGH);
+      digitalWrite(IN3, LOW);
+      digitalWrite(IN4, HIGH);
+
+      ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
+      ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
+    }
+    else if (command == 'L') {
+      digitalWrite(IN1, HIGH);
+      digitalWrite(IN2, HIGH);
+      digitalWrite(IN3, HIGH);
+      digitalWrite(IN4, LOW);
+
+      ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
+      ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
+    }
+    else if (command == 'R') {
+      digitalWrite(IN1, HIGH);
+      digitalWrite(IN2, LOW);
+      digitalWrite(IN3, LOW);
+      digitalWrite(IN4, LOW);
+
+      ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
+      ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
+    }
+    else if (command == 'S') {
+      digitalWrite(IN1, LOW);
+      digitalWrite(IN2, LOW);
+      digitalWrite(IN3, LOW);
+      digitalWrite(IN4, LOW);
+
+      ledcWrite(ENA_CHANNEL, 0);
+      ledcWrite(ENB_CHANNEL, 0);
+    }
+  }
+}
