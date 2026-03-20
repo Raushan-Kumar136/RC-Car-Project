@@ -1,151 +1,180 @@
+#include <SPI.h>
+#include <TFT_22_ILI9225.h>
 #include "BluetoothSerial.h"
 
-BluetoothSerial SerialBT;
+// ====== TFT Setup ======
+#define TFT_RST 2
+#define TFT_RS  4
+#define TFT_CS  5
+#define TFT_SDI 23
+#define TFT_CLK 18
+TFT_22_ILI9225 tft = TFT_22_ILI9225(TFT_RST, TFT_RS, TFT_CS, TFT_SDI, TFT_CLK);
 
-// Motor pins
+// ====== Motor Pins ======
 #define IN1 26
 #define IN2 27
 #define IN3 14
 #define IN4 12
-
 #define ENA 25
 #define ENB 33
 
-char command;
-
-// TF-Luna pins
-#define LIDAR_RX 16
-#define LIDAR_TX 17
-
-HardwareSerial LidarSerial(2);
-
-int distance = 0;  // Store LiDAR distance
-
-// ESP32 PWM channels
+// ====== PWM ======
 #define ENA_CHANNEL 0
 #define ENB_CHANNEL 1
 #define PWM_FREQ 5000
-#define PWM_RES 8  // 8-bit resolution
+#define PWM_RES 8
+int maxSpeed = 255;
 
-int maxSpeed = 255;  // full PWM speed
+// ====== Bluetooth ======
+BluetoothSerial SerialBT;
+char command;
 
+// ====== LiDAR ======
+#define LIDAR_RX 16
+#define LIDAR_TX 17
+HardwareSerial LidarSerial(2);
+int distance = 0;
+
+// ====== Draw Emoji ======
+void drawEmoji() {
+  int x = 110;   // center for 220 width
+  int y = 88;    // center for 176 height
+  int r = 40;
+
+  tft.fillCircle(x, y, r, COLOR_YELLOW);
+  tft.fillCircle(x-15, y-10, 5, COLOR_BLACK);
+  tft.fillCircle(x+15, y-10, 5, COLOR_BLACK);
+  tft.drawLine(x-15, y+15, x+15, y+15, COLOR_BLACK);
+}
+
+// ====== Setup ======
 void setup() {
   Serial.begin(115200);
   SerialBT.begin("ESP32_CAR");
 
-  // Start LiDAR serial
+  // LiDAR
   LidarSerial.begin(115200, SERIAL_8N1, LIDAR_RX, LIDAR_TX);
 
-  // Motor pins
+  // Motors
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
 
-  // Setup PWM for motor speed
   ledcSetup(ENA_CHANNEL, PWM_FREQ, PWM_RES);
   ledcSetup(ENB_CHANNEL, PWM_FREQ, PWM_RES);
   ledcAttachPin(ENA, ENA_CHANNEL);
   ledcAttachPin(ENB, ENB_CHANNEL);
 
-  // Set default speed to 90% of max
   ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
   ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
 
-  Serial.println("System Ready...");
+  // TFT Init
+  tft.begin();
+  tft.setOrientation(1);
+
+  // FULL GREEN BACKGROUND
+  tft.fillRectangle(0, 0, 220, 176, COLOR_GREEN);
+  drawEmoji();
 }
 
+// ====== Update TFT ======
+void updateTFT(int dist) {
+  static bool redBackground = false;
+
+  if(dist <= 25 && !redBackground) {
+    tft.fillRectangle(0, 0, 220, 176, COLOR_RED);
+    drawEmoji();
+    redBackground = true;
+  } 
+  else if(dist > 25 && redBackground) {
+    tft.fillRectangle(0, 0, 220, 176, COLOR_GREEN);
+    drawEmoji();
+    redBackground = false;
+  }
+}
+
+// ====== Loop ======
 void loop() {
-  // ================= TF-LUNA SAFE READ =================
+
+  // -------- LiDAR Reading --------
   static uint8_t buffer[9];
   static uint8_t index = 0;
 
-  while (LidarSerial.available()) {
+  while(LidarSerial.available()) {
     uint8_t byte = LidarSerial.read();
 
-    if (index == 0 && byte != 0x59) continue;
-    if (index == 1 && byte != 0x59) { index = 0; continue; }
+    if(index == 0 && byte != 0x59) continue;
+    if(index == 1 && byte != 0x59) { index = 0; continue; }
 
     buffer[index++] = byte;
 
-    if (index == 9) {
+    if(index == 9) {
       uint16_t sum = 0;
-      for (int i = 0; i < 8; i++) sum += buffer[i];
-      if ((sum & 0xFF) == buffer[8]) {
-        distance = buffer[2] + (buffer[3] << 8); // distance in cm
+      for(int i = 0; i < 8; i++) sum += buffer[i];
+
+      if((sum & 0xFF) == buffer[8]) {
+        distance = buffer[2] + (buffer[3] << 8);
         Serial.print("Distance: ");
-        Serial.print(distance);
-        Serial.println(" cm");
+        Serial.println(distance);
       }
-      index = 0; // reset for next packet
+      index = 0;
     }
   }
 
-  // ================= BLUETOOTH CAR CONTROL =================
-  if (SerialBT.available()) {
+  // -------- Bluetooth --------
+  if(SerialBT.available()) {
     command = SerialBT.read();
-    int currentSpeed = maxSpeed * 0.9; // default 90% speed
-
-    if (command == 'F') {
-      // Adjust speed based on distance
-      if (distance > 0) {
-        if (distance <= 10) {
-          currentSpeed = 0; // stop
-        } 
-        else if (distance <= 25) {
-          currentSpeed = maxSpeed * 0.4; // 40% speed
-        } 
-        else if (distance <= 40) {
-          currentSpeed = maxSpeed * 0.6; // 60% speed
-        }
-      }
-
-      Serial.print("Adjusted Speed: ");
-      Serial.println(currentSpeed);
-
-      digitalWrite(IN1, HIGH);
-      digitalWrite(IN2, LOW);
-      digitalWrite(IN3, HIGH);
-      digitalWrite(IN4, LOW);
-
-      ledcWrite(ENA_CHANNEL, currentSpeed);
-      ledcWrite(ENB_CHANNEL, currentSpeed);
-    }
-    else if (command == 'B') {
-      digitalWrite(IN1, LOW);
-      digitalWrite(IN2, HIGH);
-      digitalWrite(IN3, LOW);
-      digitalWrite(IN4, HIGH);
-
-      ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
-      ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
-    }
-    else if (command == 'L') {
-      digitalWrite(IN1, HIGH);
-      digitalWrite(IN2, HIGH);
-      digitalWrite(IN3, HIGH);
-      digitalWrite(IN4, LOW);
-
-      ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
-      ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
-    }
-    else if (command == 'R') {
-      digitalWrite(IN1, HIGH);
-      digitalWrite(IN2, LOW);
-      digitalWrite(IN3, LOW);
-      digitalWrite(IN4, LOW);
-
-      ledcWrite(ENA_CHANNEL, maxSpeed * 0.9);
-      ledcWrite(ENB_CHANNEL, maxSpeed * 0.9);
-    }
-    else if (command == 'S') {
-      digitalWrite(IN1, LOW);
-      digitalWrite(IN2, LOW);
-      digitalWrite(IN3, LOW);
-      digitalWrite(IN4, LOW);
-
-      ledcWrite(ENA_CHANNEL, 0);
-      ledcWrite(ENB_CHANNEL, 0);
-    }
   }
+
+  // -------- Speed Control --------
+  int currentSpeed = maxSpeed * 0.9;
+
+  if(distance > 0) {
+    if(distance <= 10) currentSpeed = 0;
+    else if(distance <= 25) currentSpeed = maxSpeed * 0.4;
+    else if(distance <= 40) currentSpeed = maxSpeed * 0.6;
+  }
+
+  // -------- Movement --------
+  switch(command) {
+
+    case 'F':
+      digitalWrite(IN1,HIGH); digitalWrite(IN2,LOW);
+      digitalWrite(IN3,HIGH); digitalWrite(IN4,LOW);
+      ledcWrite(ENA_CHANNEL,currentSpeed);
+      ledcWrite(ENB_CHANNEL,currentSpeed);
+      break;
+
+    case 'B':
+      digitalWrite(IN1,LOW); digitalWrite(IN2,HIGH);
+      digitalWrite(IN3,LOW); digitalWrite(IN4,HIGH);
+      ledcWrite(ENA_CHANNEL,maxSpeed*0.9);
+      ledcWrite(ENB_CHANNEL,maxSpeed*0.9);
+      break;
+
+    case 'L':
+      digitalWrite(IN1,HIGH); digitalWrite(IN2,HIGH);
+      digitalWrite(IN3,HIGH); digitalWrite(IN4,LOW);
+      ledcWrite(ENA_CHANNEL,maxSpeed*0.9);
+      ledcWrite(ENB_CHANNEL,maxSpeed*0.9);
+      break;
+
+    case 'R':
+      digitalWrite(IN1,HIGH); digitalWrite(IN2,LOW);
+      digitalWrite(IN3,LOW); digitalWrite(IN4,LOW);
+      ledcWrite(ENA_CHANNEL,maxSpeed*0.9);
+      ledcWrite(ENB_CHANNEL,maxSpeed*0.9);
+      break;
+
+    case 'S':
+      digitalWrite(IN1,LOW); digitalWrite(IN2,LOW);
+      digitalWrite(IN3,LOW); digitalWrite(IN4,LOW);
+      ledcWrite(ENA_CHANNEL,0);
+      ledcWrite(ENB_CHANNEL,0);
+      break;
+  }
+
+  // -------- TFT Update --------
+  updateTFT(distance);
 }
