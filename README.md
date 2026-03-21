@@ -1,0 +1,1 @@
+This repository is aimed to design a RC car using microcontrollers ESP 32, Arduino and ESP 32 Cam. The speciality of the car is that it can judge obstacles using LIDAR and can slow down particularly. Screen of the car reflects message based on obstacle and camera.
